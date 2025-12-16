@@ -321,23 +321,22 @@ class ServiceProviderLocator {
     }
     
     /**
-     * AJAX: Get Cities by State
+     * AJAX: Get Cities by State - Optimized version with provider counts
      */
     public function ajax_get_cities() {
         check_ajax_referer('provider_locator_nonce', 'nonce');
-        
+
         $country = isset($_POST['country']) ? sanitize_text_field($_POST['country']) : '';
         $state = isset($_POST['state']) ? sanitize_text_field($_POST['state']) : '';
-        
+
         $args = array(
             'post_type' => 'service_provider',
             'posts_per_page' => -1,
-            'post_status' => 'publish',
-            'fields' => 'ids'
+            'post_status' => 'publish'
         );
-        
+
         $tax_query = array('relation' => 'AND');
-        
+
         if ($country) {
             $tax_query[] = array(
                 'taxonomy' => 'provider_country',
@@ -345,7 +344,7 @@ class ServiceProviderLocator {
                 'terms' => $country
             );
         }
-        
+
         if ($state) {
             $tax_query[] = array(
                 'taxonomy' => 'provider_state',
@@ -353,53 +352,52 @@ class ServiceProviderLocator {
                 'terms' => $state
             );
         }
-        
+
         if (count($tax_query) > 1) {
             $args['tax_query'] = $tax_query;
         }
-        
+
         $query = new WP_Query($args);
         $cities = array();
-        
+
         if ($query->have_posts()) {
-            foreach ($query->posts as $post_id) {
+            while ($query->have_posts()) {
+                $query->the_post();
+                $post_id = get_the_ID();
                 $post_cities = wp_get_post_terms($post_id, 'provider_city');
+
                 foreach ($post_cities as $city) {
-                    if (!isset($cities[$city->slug])) {
-                        $latitude = '';
-                        $longitude = '';
-                        
-                        // Get first provider in this city for coordinates
-                        $city_providers = get_posts(array(
-                            'post_type' => 'service_provider',
-                            'posts_per_page' => 1,
-                            'tax_query' => array(
-                                array(
-                                    'taxonomy' => 'provider_city',
-                                    'field' => 'slug',
-                                    'terms' => $city->slug
-                                )
-                            )
-                        ));
-                        
-                        if (!empty($city_providers)) {
-                            $latitude = get_post_meta($city_providers[0]->ID, '_provider_latitude', true);
-                            $longitude = get_post_meta($city_providers[0]->ID, '_provider_longitude', true);
-                        }
-                        
-                        $cities[$city->slug] = array(
+                    $city_slug = $city->slug;
+
+                    if (!isset($cities[$city_slug])) {
+                        $cities[$city_slug] = array(
                             'name' => $city->name,
-                            'slug' => $city->slug,
-                            'latitude' => $latitude,
-                            'longitude' => $longitude
+                            'slug' => $city_slug,
+                            'city' => $city->name,
+                            'latitude' => get_post_meta($post_id, '_provider_latitude', true),
+                            'longitude' => get_post_meta($post_id, '_provider_longitude', true),
+                            'provider_count' => 0
                         );
+                    }
+
+                    $cities[$city_slug]['provider_count']++;
+
+                    if (empty($cities[$city_slug]['latitude']) || empty($cities[$city_slug]['longitude'])) {
+                        $cities[$city_slug]['latitude'] = get_post_meta($post_id, '_provider_latitude', true);
+                        $cities[$city_slug]['longitude'] = get_post_meta($post_id, '_provider_longitude', true);
                     }
                 }
             }
         }
-        
+
         wp_reset_postdata();
-        wp_send_json_success(array_values($cities));
+
+        $cities_array = array_values($cities);
+        usort($cities_array, function($a, $b) {
+            return $b['provider_count'] - $a['provider_count'];
+        });
+
+        wp_send_json_success($cities_array);
     }
 
     /**

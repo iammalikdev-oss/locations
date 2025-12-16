@@ -485,7 +485,7 @@ jQuery(document).ready(function($) {
     }
     
     /**
-     * Load City Pins
+     * Load City Pins - Improved version that matches city names with SVG element IDs
      */
     function loadCityPins(country, state, targetMap) {
         const map = targetMap || miniMap;
@@ -502,338 +502,261 @@ jQuery(document).ready(function($) {
                 nonce: providerLocator.nonce
             },
             success: function(response) {
-                if (!response.success) {
-                    $('.sidebar-content').html('<div class="empty-state">No city pins for this location</div>');
+                if (!response.success || !response.data || response.data.length === 0) {
+                    $('.sidebar-content').html('<div class="empty-state">No providers available for this location</div>');
                     return;
                 }
 
-                // Try to find an SVG-based map in either miniMap or main map
-                var svgEl = document.querySelector('#miniMap svg');
-                var svgContainer = document.getElementById('miniMap');
-                if (!svgEl) {
-                    svgEl = document.querySelector('#map svg');
-                    svgContainer = document.getElementById('map');
-                }
+                var svgEl = document.querySelector('#miniMap svg') || document.querySelector('#map svg');
+                var svgContainer = document.getElementById('miniMap') || document.getElementById('map');
 
-                // If we have an SVG, render HTML pins over the SVG and position them using geo-bounds
                 if (svgEl && svgContainer) {
-                    // Remove any prior overlay inside this container
-                    var overlay = svgContainer.querySelector('.svg-pin-overlay');
-                    if (overlay) overlay.parentNode.removeChild(overlay);
-
-                    // gather points with coordinates
-                    var points = response.data.filter(function(c){ return c.latitude && c.longitude; }).map(function(c){ return {
-                        lat: parseFloat(c.latitude),
-                        lng: parseFloat(c.longitude),
-                        slug: c.slug || '',
-                        name: c.city || c.name || '',
-                        sourceId: c.svg_id || c.element_id || c.id || ''
-                    }; });
-                    if (points.length === 0) {
-                        $('.sidebar-content').html('<div class="empty-state">No city pins for this location</div>');
-                        return;
-                    }
-
-                    // Compute geographic bounds for mapping. Prefer geometry for the selected state/country
-                    var latMin = Number.POSITIVE_INFINITY, latMax = Number.NEGATIVE_INFINITY, lngMin = Number.POSITIVE_INFINITY, lngMax = Number.NEGATIVE_INFINITY;
-                    try {
-                        var geom = null;
-                        if (country === 'usa' && state) {
-                            var sGeo = getStateGeoJSON(state);
-                            if (sGeo && sGeo.geometry && sGeo.geometry.coordinates) geom = sGeo.geometry.coordinates;
-                        }
-                        if (!geom) {
-                            var cGeo = getCountryGeoJSON(country);
-                            if (cGeo && cGeo.geometry && cGeo.geometry.coordinates) geom = cGeo.geometry.coordinates;
-                        }
-                        if (geom) {
-                            // geometry might be nested arrays; flatten and compute min/max
-                            var flat = [];
-                            function flattenCoords(arr) {
-                                if (!Array.isArray(arr)) return;
-                                if (typeof arr[0] === 'number' && typeof arr[1] === 'number') {
-                                    flat.push(arr);
-                                } else {
-                                    arr.forEach(flattenCoords);
-                                }
-                            }
-                            flattenCoords(geom);
-                            flat.forEach(function(pair){ if (pair && pair.length >= 2) { lngMin = Math.min(lngMin, pair[0]); lngMax = Math.max(lngMax, pair[0]); latMin = Math.min(latMin, pair[1]); latMax = Math.max(latMax, pair[1]); } });
-                        }
-                    } catch(e){ /* ignore */ }
-
-                    // If we couldn't compute bounds from geometry, fall back to points extent
-                    if (!isFinite(latMin) || !isFinite(lngMin) || !isFinite(latMax) || !isFinite(lngMax)) {
-                        latMin = Math.min.apply(null, points.map(p=>p.lat));
-                        latMax = Math.max.apply(null, points.map(p=>p.lat));
-                        lngMin = Math.min.apply(null, points.map(p=>p.lng));
-                        lngMax = Math.max.apply(null, points.map(p=>p.lng));
-                    }
-
-                    // add a tiny buffer if equal
-                    if (latMin === latMax) { latMin -= 0.02; latMax += 0.02; }
-                    if (lngMin === lngMax) { lngMin -= 0.02; lngMax += 0.02; }
-
-                    var svgRect = svgEl.getBoundingClientRect();
-                    var containerRect = svgContainer.getBoundingClientRect();
-                    // ensure container positioned so overlay absolute works
-                    var cs = window.getComputedStyle(svgContainer);
-                    if (cs.position === 'static' || !cs.position) svgContainer.style.position = 'relative';
-
-                    var overlayDiv = document.createElement('div');
-                    overlayDiv.className = 'svg-pin-overlay';
-                    overlayDiv.style.position = 'absolute';
-                    // position overlay exactly over the rendered SVG area (handles letterboxing from preserveAspectRatio)
-                    overlayDiv.style.left = Math.round(svgRect.left - containerRect.left) + 'px';
-                    overlayDiv.style.top = Math.round(svgRect.top - containerRect.top) + 'px';
-                    overlayDiv.style.width = Math.round(svgRect.width) + 'px';
-                    overlayDiv.style.height = Math.round(svgRect.height) + 'px';
-                    overlayDiv.style.pointerEvents = 'none';
-                    svgContainer.appendChild(overlayDiv);
-
-                    // Compute viewBox for SVG-aware coordinate mapping (better accuracy)
-
-                    var viewport = computeSvgViewport(svgEl);
-                    var vb = viewport && viewport.vb ? viewport.vb : null;
-                    // viewport.renderedWidth/Height and offsetX/offsetY are available if computeSvgViewport succeeded
-
-                    points.forEach(function(city){
-                        // validate coords
-                        if (!isFinite(city.lat) || !isFinite(city.lng)) return;
-
-                        var normX = (lngMax - lngMin) !== 0 ? (city.lng - lngMin) / (lngMax - lngMin) : 0.5;
-                        var normY = (latMax - latMin) !== 0 ? (city.lat - latMin) / (latMax - latMin) : 0.5;
-                        // clamp
-                        normX = Math.max(0, Math.min(1, normX));
-                        normY = Math.max(0, Math.min(1, normY));
-
-                        // compute the corresponding coordinates in SVG user-space (viewBox coords)
-                        var xVB = null, yVB = null;
-                        if (vb && typeof vb.width === 'number' && typeof vb.height === 'number') {
-                            xVB = vb.x + normX * vb.width;
-                            yVB = vb.y + (1 - normY) * vb.height; // invert Y because SVG coords grow downward
-                        } else {
-                            // if no viewBox, use normalized pixels as a pseudo user-space
-                            xVB = normX * svgRect.width;
-                            yVB = (1 - normY) * svgRect.height;
-                        }
-
-                        // Try to find the SVG element (path/group) that corresponds to this city.
-                        // Strategy:
-                        // 1) Try find by id (using common variations of slug/name)
-                        // 2) If not found, use point-in-fill tests on all elements with an id
-                        function findSvgElementForCity(city) {
-                            try {
-                                var tryIds = [];
-                                if (city.sourceId) tryIds.push(city.sourceId);
-                                if (city.slug) tryIds.push(city.slug, city.slug.replace(/-/g,' '), city.slug.replace(/-/g,''));
-                                if (city.name) tryIds.push(city.name, city.name.replace(/\s+/g,'-'), city.name.replace(/\s+/g,''));
-                                // unique and non-empty
-                                tryIds = tryIds.filter(Boolean).map(function(s){ return s.trim(); }).filter(function(v,i,a){ return a.indexOf(v) === i; });
-
-                                // Preferred direct attribute matching (id, data-slug, data-name, title attr)
-                                for (var i=0;i<tryIds.length;i++) {
-                                    var id = tryIds[i];
-                                    var selectors = [
-                                        '[id="' + id + '"]',
-                                        '[id="' + id.replace(/\s+/g,'-') + '"]',
-                                        '[data-slug="' + id + '"]',
-                                        '[data-name="' + id + '"]',
-                                        '[data-city="' + id + '"]',
-                                        '[title="' + id + '"]'
-                                    ];
-                                    for (var si=0;si<selectors.length;si++) {
-                                        try {
-                                            var el = svgEl.querySelector(selectors[si]);
-                                            if (el) return el;
-                                        } catch(e) { /* ignore malformed selectors */ }
-                                    }
-                                }
-
-                                // Tolerant matching: normalized comparisons against id/title/data-attrs
-                                // broaden candidates to all elements (some SVGs use titles or data-attrs without id)
-                                var candidates = svgEl.querySelectorAll('*');
-                                var normTargets = tryIds.map(function(t){ return normalizeForMatch(t); }).filter(Boolean);
-                                if (normTargets.length) {
-                                    for (var j=0;j<candidates.length;j++) {
-                                        var cand = candidates[j];
-                                        try {
-                                            var attrs = [];
-                                            if (cand.id) attrs.push(cand.id);
-                                            ['data-slug','data-name','data-city','title','inkscape:label','id'].forEach(function(a){
-                                                try { var v = cand.getAttribute(a); if (v) attrs.push(v); } catch(e) {}
-                                            });
-                                            // child <title> text
-                                            try { var tEl = cand.querySelector && cand.querySelector('title'); if (tEl && tEl.textContent) attrs.push(tEl.textContent); } catch(e) {}
-
-                                            var normAttrs = attrs.map(normalizeForMatch).filter(Boolean);
-                                            for (var ti=0; ti<normTargets.length; ti++) {
-                                                var target = normTargets[ti];
-                                                for (var ai=0; ai<normAttrs.length; ai++) {
-                                                    var a = normAttrs[ai];
-                                                    if (!a || !target) continue;
-                                                                if (a === target || a.indexOf(target) !== -1 || target.indexOf(a) !== -1) {
-                                                                    // debug outline if requested
-                                                                    if (window.providerLocator && window.providerLocator.debugSvgMatch) {
-                                                                        try { cand.setAttribute('data-matched', '1'); cand.style.outline = '2px solid rgba(255,0,0,0.7)'; } catch(e) {}
-                                                                        try { console.log('SVG match by attr', target, cand); } catch(e) {}
-                                                                    }
-                                                                    return cand;
-                                                                }
-                                                }
-                                            }
-                                        } catch(e) { /* ignore */ }
-                                    }
-                                }
-                                // point-in-fill fallback (use SVG APIs if available)
-                                if (typeof svgEl.createSVGPoint === 'function') {
-                                    var p = svgEl.createSVGPoint();
-                                    p.x = xVB; p.y = yVB;
-                                    for (var k=0;k<candidates.length;k++) {
-                                        var cand2 = candidates[k];
-                                        try {
-                                            if (typeof cand2.isPointInFill === 'function' && cand2.isPointInFill(p)) return cand2;
-                                            if (typeof cand2.isPointInStroke === 'function' && cand2.isPointInStroke(p)) return cand2;
-                                        } catch(e) { /* some SVG elements may throw; ignore */ }
-                                    }
-                                }
-
-                                // nearest-centroid fallback: find candidate with bbox centroid closest to xVB,yVB
-                                var best = null, bestDist = Number.POSITIVE_INFINITY;
-                                for (var m=0;m<candidates.length;m++) {
-                                    var cand3 = candidates[m];
-                                    try {
-                                        var bb2 = cand3.getBBox ? cand3.getBBox() : null;
-                                        if (!bb2) continue;
-                                        var cx = bb2.x + bb2.width/2, cy = bb2.y + bb2.height/2;
-                                        var dx = cx - xVB, dy = cy - yVB;
-                                        var d2 = dx*dx + dy*dy;
-                                        if (d2 < bestDist) { bestDist = d2; best = cand3; }
-                                    } catch(e) { /* ignore */ }
-                                }
-                                if (best) {
-                                    // choose it only if reasonably close (threshold = 10% of max dimension)
-                                    try {
-                                        var maxDim = Math.max(vb ? vb.width : svgRect.width, vb ? vb.height : svgRect.height);
-                                        if (Math.sqrt(bestDist) <= (maxDim * 0.10)) {
-                                            if (window.providerLocator && window.providerLocator.debugSvgMatch) {
-                                                try { best.style.outline='2px solid rgba(0,128,0,0.7)'; } catch(e){}
-                                                try { console.log('SVG match by nearest centroid', city, best); } catch(e) {}
-                                            }
-                                            return best;
-                                        }
-                                    } catch(e) { /* ignore */ }
-                                }
-                            } catch(e) { /* ignore */ }
-                            return null;
-                        }
-
-                        var targetEl = findSvgElementForCity(city);
-
-                        var centerVB = null;
-                        if (targetEl) {
-                            // center on the element's bbox centroid for best visual placement
-                            try {
-                                var bb = targetEl.getBBox();
-                                centerVB = { x: bb.x + bb.width/2, y: bb.y + bb.height/2 };
-                            } catch(e) {
-                                // fallback to original point
-                                centerVB = { x: xVB, y: yVB };
-                            }
-                        } else {
-                            // no element match, use the raw computed point
-                            centerVB = { x: xVB, y: yVB };
-                        }
-
-                        // convert centerVB into pixels inside the overlay (accounting for viewBox scaling and offsets)
-                        var xPx = 0, yPx = 0;
-                        if (vb && typeof vb.width === 'number' && typeof vb.height === 'number' && viewport) {
-                            xPx = viewport.offsetX + ((centerVB.x - vb.x) / vb.width) * viewport.renderedWidth;
-                            yPx = viewport.offsetY + ((centerVB.y - vb.y) / vb.height) * viewport.renderedHeight;
-                        } else {
-                            xPx = centerVB.x;
-                            yPx = centerVB.y;
-                        }
-
-                        // clamp to overlay area
-                        xPx = Math.max(0, Math.min(Math.round(overlayDiv.clientWidth), Math.round(xPx)));
-                        yPx = Math.max(0, Math.min(Math.round(overlayDiv.clientHeight), Math.round(yPx)));
-
-                        var pin = document.createElement('div');
-                        pin.className = 'svg-pin';
-                        pin.style.position = 'absolute';
-                        pin.style.left = Math.round(xPx) + 'px';
-                        pin.style.top = Math.round(yPx) + 'px';
-                        pin.style.pointerEvents = 'auto';
-                        pin.style.transform = 'translate(-50%, -50%)'; // center
-                        pin.innerHTML = '<div class="pin-inner" title="' + (city.name || city.slug || '') + '"></div>';
-                        pin.addEventListener('click', function(e){
-                            e.stopPropagation();
-                            overlayDiv.querySelectorAll('.pin-inner').forEach(function(el){ el.classList.remove('active'); });
-                            var inner = pin.querySelector('.pin-inner');
-                            if (inner) inner.classList.add('active');
-                            loadProviders(country, state, city.slug);
-                        });
-                        overlayDiv.appendChild(pin);
-                    });
-
-                    $('.sidebar-content').html('<div class="empty-state">Select a city pin to view providers</div>');
-                    return;
+                    renderPinsOnSVG(svgEl, svgContainer, response.data, country, state);
+                } else if (map) {
+                    renderPinsOnLeaflet(map, response.data, country, state);
+                } else {
+                    $('.sidebar-content').html('<div class="empty-state">Map not initialized</div>');
                 }
-
-                // Leaflet case: ensure we have a map reference
-                if (!map) {
-                    // try to use miniMap container first, otherwise main map
-                    var mEl = document.getElementById('miniMap');
-                    var containerId = 'miniMap';
-                    if (!mEl) { mEl = document.getElementById('map'); containerId = 'map'; }
-                    if (mEl) {
-                        var bounds = mapBounds[country] || mapBounds.usa;
-                        map = L.map(containerId, Object.assign({}, mapConfig.options, { center: bounds.center, zoom: bounds.zoom }));
-                        L.tileLayer(mapConfig.tileLayer || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: mapConfig.attribution || '' }).addTo(map);
-                        miniMap = map; // store if we created it
-                    } else {
-                        // no map container to attach to; abort gracefully
-                        $('.sidebar-content').html('<div class="empty-state">No map container available to render city pins</div>');
-                        return;
-                    }
-                }
-
-                // Clear existing markers
-                cityMarkers.forEach(function(marker){ if (map && map.removeLayer) map.removeLayer(marker); });
-                cityMarkers = [];
-
-                response.data.forEach(function(city){
-                    if (city.latitude && city.longitude) {
-                        var coords = [parseFloat(city.latitude), parseFloat(city.longitude)];
-
-                        var customIcon = L.divIcon({
-                            className: 'custom-pin',
-                            iconSize: [28, 28],
-                            iconAnchor: [14, 14],
-                            html: '<div class="pin-inner"></div>'
-                        });
-
-                        var marker = L.marker(coords, { icon: customIcon })
-                            .addTo(map)
-                            .on('click', function() {
-                                document.querySelectorAll('.custom-pin').forEach(function(el){ el.classList.remove('active'); });
-                                if (this._icon) this._icon.querySelector('.pin-inner').classList.add('active');
-                                loadProviders(country, state, city.slug);
-                            });
-
-                        // add a tiny tooltip for accessibility / hint
-                        if (city.name || city.slug) {
-                            marker.bindTooltip(city.name || city.slug, { direction: 'top', offset: [0, -10], className: 'city-tooltip' });
-                        }
-
-                        cityMarkers.push(marker);
-                    }
-                });
-
-                $('.sidebar-content').html('<div class="empty-state">Select a city pin to view providers</div>');
+            },
+            error: function() {
+                $('.sidebar-content').html('<div class="empty-state">Error loading city data</div>');
             }
         });
+    }
+
+    /**
+     * Render pins on SVG map by matching city names with SVG element IDs
+     */
+    function renderPinsOnSVG(svgEl, svgContainer, cities, country, state) {
+        var existingOverlay = svgContainer.querySelector('.svg-pin-overlay');
+        if (existingOverlay) existingOverlay.remove();
+
+        var svgRect = svgEl.getBoundingClientRect();
+        var containerRect = svgContainer.getBoundingClientRect();
+
+        var computedStyle = window.getComputedStyle(svgContainer);
+        if (computedStyle.position === 'static' || !computedStyle.position) {
+            svgContainer.style.position = 'relative';
+        }
+
+        var overlayDiv = document.createElement('div');
+        overlayDiv.className = 'svg-pin-overlay';
+        overlayDiv.style.cssText = 'position:absolute;pointer-events:none;' +
+            'left:' + (svgRect.left - containerRect.left) + 'px;' +
+            'top:' + (svgRect.top - containerRect.top) + 'px;' +
+            'width:' + svgRect.width + 'px;' +
+            'height:' + svgRect.height + 'px;';
+        svgContainer.appendChild(overlayDiv);
+
+        var viewport = computeSvgViewport(svgEl);
+        var pinsPlaced = 0;
+        var debugMode = window.providerLocator && window.providerLocator.debug;
+
+        console.log('Rendering pins for', cities.length, 'cities');
+
+        cities.forEach(function(city, index) {
+            var cityName = city.name || city.city || city.slug || '';
+            if (!cityName) {
+                console.warn('City at index', index, 'has no name:', city);
+                return;
+            }
+
+            var svgElement = findSVGElementByCity(svgEl, cityName, city.slug);
+
+            if (svgElement) {
+                try {
+                    var bbox = svgElement.getBBox();
+                    var centerX = bbox.x + bbox.width / 2;
+                    var centerY = bbox.y + bbox.height / 2;
+
+                    var screenCoords = svgPointToScreen(centerX, centerY, viewport, svgRect);
+
+                    if (debugMode) {
+                        svgElement.style.outline = '2px solid red';
+                        svgElement.setAttribute('data-matched-city', cityName);
+                    }
+
+                    createPin(overlayDiv, screenCoords.x, screenCoords.y, city, country, state);
+                    pinsPlaced++;
+                } catch(e) {
+                    console.error('Could not place pin for city:', cityName, e);
+                }
+            } else {
+                console.warn('No SVG element found for city:', cityName);
+            }
+        });
+
+        console.log('Successfully placed', pinsPlaced, 'out of', cities.length, 'pins');
+
+        if (pinsPlaced === 0) {
+            var availableIds = Array.from(svgEl.querySelectorAll('[id]')).map(function(el) { return el.id; }).filter(Boolean);
+            console.info('Available SVG element IDs:', availableIds);
+            $('.sidebar-content').html('<div class="empty-state">No matching cities found on map<br><small>Check console for available IDs</small></div>');
+        } else {
+            $('.sidebar-content').html('<div class="empty-state">Select a city pin to view providers (' + pinsPlaced + ' available)</div>');
+        }
+    }
+
+    /**
+     * Find SVG element by city name with intelligent matching
+     */
+    function findSVGElementByCity(svgEl, cityName, citySlug) {
+        if (!svgEl || !cityName) {
+            console.warn('findSVGElementByCity: Missing required parameters', { svgEl: !!svgEl, cityName: cityName });
+            return null;
+        }
+
+        var normalized = normalizeForMatch(cityName);
+        var slugNorm = normalizeForMatch(citySlug || '');
+
+        var tryIds = [
+            cityName,
+            cityName.replace(/\s+/g, '-'),
+            cityName.replace(/\s+/g, ''),
+            citySlug,
+            citySlug ? citySlug.replace(/-/g, ' ') : '',
+            citySlug ? citySlug.replace(/-/g, '') : ''
+        ].filter(Boolean);
+
+        for (var i = 0; i < tryIds.length; i++) {
+            var id = tryIds[i];
+            try {
+                if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+                    var el = svgEl.querySelector('#' + CSS.escape(id));
+                    if (el) {
+                        console.log('Found SVG element by CSS.escape:', id);
+                        return el;
+                    }
+                }
+
+                el = svgEl.querySelector('[id="' + id.replace(/"/g, '\\"') + '"]');
+                if (el) {
+                    console.log('Found SVG element by attribute selector:', id);
+                    return el;
+                }
+
+                el = svgEl.querySelector('[data-name="' + id.replace(/"/g, '\\"') + '"]');
+                if (el) {
+                    console.log('Found SVG element by data-name:', id);
+                    return el;
+                }
+            } catch(e) {
+                console.warn('Error querying selector for:', id, e);
+            }
+        }
+
+        var allElements = svgEl.querySelectorAll('[id]');
+        for (var j = 0; j < allElements.length; j++) {
+            var element = allElements[j];
+            var elId = element.id || '';
+            var elNorm = normalizeForMatch(elId);
+
+            if (elNorm === normalized || elNorm === slugNorm) {
+                console.log('Found SVG element by normalized match:', elId, 'for city:', cityName);
+                return element;
+            }
+
+            if (normalized.length > 3 && elNorm.indexOf(normalized) !== -1) {
+                console.log('Found SVG element by partial match:', elId, 'for city:', cityName);
+                return element;
+            }
+            if (slugNorm.length > 3 && elNorm.indexOf(slugNorm) !== -1) {
+                console.log('Found SVG element by slug partial match:', elId, 'for city:', cityName);
+                return element;
+            }
+        }
+
+        console.warn('No SVG element found for city:', cityName, 'slug:', citySlug, 'tried:', tryIds);
+        return null;
+    }
+
+    /**
+     * Convert SVG coordinates to screen coordinates
+     */
+    function svgPointToScreen(svgX, svgY, viewport, svgRect) {
+        var x, y;
+
+        if (viewport && viewport.vb && viewport.vb.width && viewport.vb.height) {
+            var vb = viewport.vb;
+            x = viewport.offsetX + ((svgX - vb.x) / vb.width) * viewport.renderedWidth;
+            y = viewport.offsetY + ((svgY - vb.y) / vb.height) * viewport.renderedHeight;
+        } else {
+            x = svgX;
+            y = svgY;
+        }
+
+        return { x: Math.round(x), y: Math.round(y) };
+    }
+
+    /**
+     * Create a pin element
+     */
+    function createPin(container, x, y, city, country, state) {
+        var pin = document.createElement('div');
+        pin.className = 'svg-pin';
+        pin.setAttribute('data-city', city.slug || '');
+        pin.style.cssText = 'position:absolute;pointer-events:auto;' +
+            'left:' + x + 'px;top:' + y + 'px;' +
+            'transform:translate(-50%,-50%);';
+
+        var cityDisplayName = city.name || city.city || city.slug || 'Unknown';
+        pin.innerHTML = '<div class="pin-inner" title="' + cityDisplayName + '"></div>';
+
+        pin.addEventListener('click', function(e) {
+            e.stopPropagation();
+            container.querySelectorAll('.pin-inner').forEach(function(el) {
+                el.classList.remove('active');
+            });
+            pin.querySelector('.pin-inner').classList.add('active');
+            loadProviders(country, state, city.slug);
+        });
+
+        container.appendChild(pin);
+    }
+
+    /**
+     * Render pins on Leaflet map (fallback)
+     */
+    function renderPinsOnLeaflet(map, cities, country, state) {
+        cityMarkers.forEach(function(marker) {
+            if (map && map.removeLayer) map.removeLayer(marker);
+        });
+        cityMarkers = [];
+
+        cities.forEach(function(city) {
+            if (city.latitude && city.longitude) {
+                var coords = [parseFloat(city.latitude), parseFloat(city.longitude)];
+
+                var customIcon = L.divIcon({
+                    className: 'custom-pin',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14],
+                    html: '<div class="pin-inner"></div>'
+                });
+
+                var marker = L.marker(coords, { icon: customIcon })
+                    .addTo(map)
+                    .on('click', function() {
+                        document.querySelectorAll('.custom-pin').forEach(function(el) {
+                            el.classList.remove('active');
+                        });
+                        if (this._icon) this._icon.querySelector('.pin-inner').classList.add('active');
+                        loadProviders(country, state, city.slug);
+                    });
+
+                if (city.name || city.slug) {
+                    marker.bindTooltip(city.name || city.slug, {
+                        direction: 'top',
+                        offset: [0, -10],
+                        className: 'city-tooltip'
+                    });
+                }
+
+                cityMarkers.push(marker);
+            }
+        });
+
+        $('.sidebar-content').html('<div class="empty-state">Select a city pin to view providers</div>');
     }
     
     /**
