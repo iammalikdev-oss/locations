@@ -1,0 +1,107 @@
+/* Service Provider Locator - Admin Styles */
+
+.provider-meta-box {
+    background: #fff;
+    padding: 20px;
+}
+
+.provider-meta-box .form-table {
+    margin: 0;
+}
+
+.provider-meta-box .form-table th {
+    width: 150px;
+    font-weight: 600;
+    color: #23282d;
+}
+
+.provider-meta-box .form-table td {
+    padding: 15px 10px;
+}
+
+.provider-meta-box input[type="text"],
+.provider-meta-box input[type="email"],
+.provider-meta-box input[type="url"] {
+    width: 100%;
+    max-width: 500px;
+    padding: 8px 12px;
+    font-size: 14px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.provider-meta-box input[type="text"]:focus,
+.provider-meta-box input[type="email"]:focus,
+.provider-meta-box input[type="url"]:focus {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+    outline: none;
+}
+
+/* Coordinate Fields */
+.provider-meta-box tr:nth-child(5),
+.provider-meta-box tr:nth-child(6) {
+    background: #f9f9f9;
+}
+
+.provider-meta-box input[placeholder] {
+    font-style: italic;
+    color: #999;
+}
+
+/* Admin Column Headers */
+.wp-list-table .column-provider_country,
+.wp-list-table .column-provider_state,
+.wp-list-table .column-provider_city {
+    width: 12%;
+}
+
+/* Taxonomy Terms in Admin */
+.term-slug-wrap,
+.term-parent-wrap {
+    margin-bottom: 15px;
+}
+
+/* Help Text */
+.provider-help-text {
+    display: block;
+    margin-top: 8px;
+    color: #666;
+    font-size: 13px;
+    font-style: italic;
+}
+
+/* Provider Admin Notice */
+.provider-admin-notice {
+    background: #d7f0ff;
+    border-left: 4px solid #2271b1;
+    padding: 12px;
+    margin: 20px 0;
+}
+
+.provider-admin-notice p {
+    margin: 0;
+    color: #1e3a5f;
+}
+
+/* Quick Edit Fields */
+.inline-edit-col input[type="text"] {
+    width: 100%;
+}
+
+/* Media Upload Button */
+.provider-meta-box .upload-btn {
+    margin-top: 10px;
+}
+
+.provider-meta-box .image-preview {
+    margin-top: 15px;
+    max-width: 300px;
+}
+
+.provider-meta-box .image-preview img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
